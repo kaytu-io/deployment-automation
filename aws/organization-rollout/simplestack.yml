@@ -97,6 +97,10 @@ Resources:
         Enabled: true
         RetainStacksOnAccountRemoval: false
       PermissionModel: SERVICE_MANAGED
+      OperationPreferences:
+        ConcurrencyMode: SOFT_FAILURE_TOLERANCE
+        MaxConcurrentCount: 15
+        FailureTolerancePercentage: 100
       StackInstancesGroup:
         - DeploymentTargets: 
             Accounts: !If [Accounts, !Split [ ",", !Ref AccountList ], !Ref AWS::NoValue]
