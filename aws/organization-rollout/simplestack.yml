@@ -205,13 +205,9 @@ Resources:
 
 Outputs:
   CFNOrganizationRoleArn:
-    Description: Organization role ARN.
+    Description: Organization Role.
     Value: !GetAtt OrganizationRole.Arn
   AccessKeyId:
-    Value: !Ref IAMAccessKeys
-    Export:
-      Name: !Sub '${AWS::StackName}-AccessKeyId'
-  SecretAccessKey:
-    Value: !GetAtt [IAMAccessKeys, SecretAccessKey]
-    Export:
-      Name: !Sub '${AWS::StackName}-SecretAccessKey'
+    Description: Name of the IAM User
+    Value: !Ref IAMUsernameInOrganizationAccount
+    
