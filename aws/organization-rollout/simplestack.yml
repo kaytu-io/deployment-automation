@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create the Simple Stack in member accounts.
+Parameters:
+  AccountList:
+    Type: String
+    Default: ""
+    Description: List of Accounts to deploy the stackset to.
+  OrganizationUnitList:
+    Type: String
+    Default: ""
+    Description: List of OUs to deploy the stackset to.
+  MemberRoleName:
+    Type: String
+    Default: SimpleStackReadOnly
+    Description: The name of the role that will assume in each member account.
+
+Conditions:
+  OUs: !Not [ !Equals [ !Ref OrganizationUnitList, ''] ]
+  Accounts: !Not [ !Equals [ !Ref AccountList, ''] ]
+
+Resources:
+  SimpleStackReadOnly:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/SecurityAudit
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSSSODirectoryReadOnly
+        - arn:aws:iam::aws:policy/AWSSSOReadOnly
+        - arn:aws:iam::aws:policy/IAMAccessAdvisorReadOnly
+        - arn:aws:iam::aws:policy/IAMAccessAnalyzerReadOnlyAccess
+      RoleName: SimpleStackReadOnly
+      Description: Admin Role that will be used to fetch resources from member accounts
+      Policies:
+        - PolicyName: SimpleStackAssumeRole
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Resource: '*'
+                Action:
+                  - 'organizations:List*'
+                  - 'sts:AssumeRole'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub '${AWS::AccountId}' 
+            Action:
+              - 'sts:AssumeRole'
+              - 'sts:TagSession'
+  SimpleStackMemberRoles:
+    Type: 'AWS::CloudFormation::StackSet'
+    Properties:
+      StackSetName: SimpleStackOrgRoles
+      Description: simplifiedsecurityorg setup
+      Capabilities:
+        - CAPABILITY_NAMED_IAM
+      AutoDeployment:
+        Enabled: true
+        RetainStacksOnAccountRemoval: false
+      PermissionModel: SERVICE_MANAGED
+      StackInstancesGroup:
+        - DeploymentTargets: 
+            Accounts: !If [Accounts, !Split [ ",", !Ref AccountList ], !Ref AWS::NoValue]
+            OrganizationalUnitIds: !If [OUs, !Split [ ",", !Ref OrganizationUnitList ], !Ref  AWS::NoValue]
+          Regions: 
+            - !Ref AWS::Region
+      ManagedExecution:
+        Active: true
+      Parameters: 
+        - ParameterKey: AdminRoleArn
+          ParameterValue: !GetAtt SimpleStackReadOnly.Arn
+        - ParameterKey: MemberRoleName
+          ParameterValue: !Ref MemberRoleName
+      TemplateBody: |
+        {
+          "AWSTemplateFormatVersion": "2010-09-09",
+          "Description": "Create the simplestackrole in member accounts.",
+          "Parameters": {
+              "AdminRoleArn": {
+                  "Type": "String",
+                  "Description": "The role that is allowed to assume the role."
+              },
+              "MemberRoleName": {
+                  "Type": "String",
+                  "Description": "The name of the role that SimpleStack will assume in each member account."
+              },
+          },
+          "Resources": {
+              "Simplestack": {
+                  "Type": "AWS::IAM::ManagedPolicy",
+                  "Properties": {
+                      "ManagedPolicyName": "simplestack",
+                      "Description": "A Limited policy to allow simple stack do its job",
+                      "PolicyDocument": {
+                          "Version": "2012-10-17",
+                          "Statement": [
+                              {
+                                  "Effect": "Deny",
+                                  "Resource": "*",
+                                  "Action": [
+                                      "cloudformation:GetTemplate",
+                                      "dynamodb:GetItem",
+                                      "dynamodb:BatchGetItem",
+                                      "dynamodb:Query",
+                                      "dynamodb:Scan",
+                                      "ec2:GetConsoleOutput",
+                                      "ec2:GetConsoleScreenshot",
+                                      "ecr:BatchGetImage",
+                                      "ecr:GetAuthorizationToken",
+                                      "ecr:GetDownloadUrlForLayer",
+                                      "kinesis:Get*",
+                                      "lambda:GetFunction",
+                                      "logs:GetLogEvents",
+                                      "s3:GetObject",
+                                      "sdb:Select*",
+                                      "sqs:ReceiveMessage"
+                                  ]
+                              }
+                          ]
+                      }
+                  }
+              },
+              "SimpleStackReadOnly": {
+                  "Type": "AWS::IAM::Role",
+                  "Properties": {
+                      "RoleName": { "Ref" : "MemberRoleName" },
+                      "Description": "Read Only Access Simple Stack fetch resources from member accounts",
+                      "ManagedPolicyArns": [
+                          {
+                              "Ref": "SimpleStack"
+                          },
+                          "arn:aws:iam::aws:policy/ReadOnlyAccess",
+                          "arn:aws:iam::aws:policy/SecurityAudit",
+                          "arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess",
+                          "arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess",
+                          "arn:aws:iam::aws:policy/IAMAccessAnalyzerReadOnlyAccess"
+                      ],
+                      "MaxSessionDuration": 28800,
+                      "AssumeRolePolicyDocument": {
+                          "Version": "2012-10-17",
+                          "Statement": [
+                              {
+                                  "Effect": "Allow",
+                                  "Principal": {
+                                      "AWS": {
+                                          "Fn::Sub": "${AdminRoleArn}"
+                                      }
+                                  },
+                                  "Action": [
+                                      "sts:AssumeRole",
+                                      "sts:TagSession"
+                                  ]
+                              }
+                          ]
+                      }
+                  }
+              }
+          }
+        }
+Outputs:
+  AdminRoleArn:
+    Value: !GetAtt SimpleStackReadOnly.Arn
+  MemberRoleName:
+    Value: !Ref MemberRoleName
