@@ -1,6 +1,18 @@
-AWSTemplateFormatVersion: 2010-09-09
-Description: Create the Simple Stack in member accounts.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploys Kaytu Platform to AWS Organization
 Parameters:
+  IAMUsernameInOrganizationAccount:
+    Type: String
+    Default: SimpleStackIAMUser
+    Description: IAM User to create
+  IAMGroupnameInOrganizationAccount:
+    Type: String
+    Default: SimpleStackIAMGroup
+    Description: IAM User to create
+  RoleNameInAccount:
+    Type: String
+    Default: SimpleStackReadOnly
+    Description: The name of the role that will be assumed in each member account.
   AccountList:
     Type: String
     Default: ""
@@ -9,32 +21,19 @@ Parameters:
     Type: String
     Default: ""
     Description: List of OUs to deploy the stackset to.
-  MemberRoleName:
-    Type: String
-    Default: SimpleStackReadOnly
-    Description: The name of the role that will assume in each member account.
 
 Conditions:
   OUs: !Not [ !Equals [ !Ref OrganizationUnitList, ''] ]
   Accounts: !Not [ !Equals [ !Ref AccountList, ''] ]
 
 Resources:
-  SimpleStackReadOnly:
+  OrganizationRole:
     Type: 'AWS::IAM::Role'
     Properties:
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/SecurityAudit
-        - arn:aws:iam::aws:policy/ReadOnlyAccess
-        - arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess
-        - arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess
-        - arn:aws:iam::aws:policy/AWSSSODirectoryReadOnly
-        - arn:aws:iam::aws:policy/AWSSSOReadOnly
-        - arn:aws:iam::aws:policy/IAMAccessAdvisorReadOnly
-        - arn:aws:iam::aws:policy/IAMAccessAnalyzerReadOnlyAccess
-      RoleName: SimpleStackReadOnly
-      Description: Admin Role that will be used to fetch resources from member accounts
+      RoleName: !Ref RoleNameInAccount
+      Description: Allows the platform to gather inventory of the organization and member accounts
       Policies:
-        - PolicyName: SimpleStackAssumeRole
+        - PolicyName: SimpleStackRoleAssumption
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -52,11 +51,46 @@ Resources:
             Action:
               - 'sts:AssumeRole'
               - 'sts:TagSession'
-  SimpleStackMemberRoles:
+      ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/SecurityAudit
+          - arn:aws:iam::aws:policy/ReadOnlyAccess
+          - arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess
+          - arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess
+          - arn:aws:iam::aws:policy/AWSSSODirectoryReadOnly
+          - arn:aws:iam::aws:policy/AWSSSOReadOnly
+          - arn:aws:iam::aws:policy/IAMAccessAdvisorReadOnly
+          - arn:aws:iam::aws:policy/IAMAccessAnalyzerReadOnlyAccess
+  IAMUserInOrganizationAccount:
+   Type: 'AWS::IAM::User'
+   Properties:
+    UserName: !Ref IAMUsernameInOrganizationAccount
+  IAMGroupInOrganizationAccount:
+   Type: 'AWS::IAM::Group'
+   Properties:
+     GroupName: !Ref IAMGroupnameInOrganizationAccount
+  AddOrganizationUserToOrganizationGroup:
+    Type: 'AWS::IAM::UserToGroupAddition'
+    Properties:
+     Users:
+      - !Ref IAMUserInOrganizationAccount
+     GroupName: !Ref IAMGroupInOrganizationAccount
+  AttachRoleToOrganizationGroup:
+      Type: 'AWS::IAM::GroupPolicy'
+      Properties:
+        PolicyName: SimpleStackAllowRoleAssumption
+        GroupName: !Ref IAMGroupInOrganizationAccount
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'sts:AssumeRole'
+              Resource: !GetAtt OrganizationRole.Arn
+  MemberAccountRoleStackSet:
     Type: 'AWS::CloudFormation::StackSet'
     Properties:
-      StackSetName: SimpleStackOrgRoles
-      Description: simplifiedsecurityorg setup
+      StackSetName: SimpleStackMemberAccountRollout
+      Description: Stack Set that will roll out to member account
       Capabilities:
         - CAPABILITY_NAMED_IAM
       AutoDeployment:
@@ -72,30 +106,30 @@ Resources:
       ManagedExecution:
         Active: true
       Parameters: 
-        - ParameterKey: AdminRoleArn
-          ParameterValue: !GetAtt SimpleStackReadOnly.Arn
-        - ParameterKey: MemberRoleName
-          ParameterValue: !Ref MemberRoleName
+        - ParameterKey: OrganizationRoleArn
+          ParameterValue: !GetAtt OrganizationRole.Arn  
+        - ParameterKey: MemberAccountRoleName
+          ParameterValue: !Ref RoleNameInAccount
       TemplateBody: |
         {
           "AWSTemplateFormatVersion": "2010-09-09",
-          "Description": "Create the simplestackrole in member accounts.",
+          "Description": "Create a reader role in member accounts.",
           "Parameters": {
-              "AdminRoleArn": {
+              "OrganizationRoleArn": {
                   "Type": "String",
                   "Description": "The role that is allowed to assume the role."
               },
-              "MemberRoleName": {
+              "MemberAccountRoleName": {
                   "Type": "String",
-                  "Description": "The name of the role that SimpleStack will assume in each member account."
-              },
+                  "Description": "The name of the role that will be deployed in each member account."
+              }
           },
           "Resources": {
-              "Simplestack": {
+              "SimpleStack": {
                   "Type": "AWS::IAM::ManagedPolicy",
                   "Properties": {
-                      "ManagedPolicyName": "simplestack",
-                      "Description": "A Limited policy to allow simple stack do its job",
+                      "ManagedPolicyName": "SimpleStackPolicy",
+                      "Description": "A Limited policy to allow cloudquery to do its job",
                       "PolicyDocument": {
                           "Version": "2012-10-17",
                           "Statement": [
@@ -125,11 +159,11 @@ Resources:
                       }
                   }
               },
-              "SimpleStackReadOnly": {
+              "MemberAccountReadOnlyRole": {
                   "Type": "AWS::IAM::Role",
                   "Properties": {
-                      "RoleName": { "Ref" : "MemberRoleName" },
-                      "Description": "Read Only Access Simple Stack fetch resources from member accounts",
+                      "RoleName": { "Ref" : "MemberAccountRoleName" },
+                      "Description": "Read Only Access for to fetch inventory from member accounts",
                       "ManagedPolicyArns": [
                           {
                               "Ref": "SimpleStack"
@@ -138,7 +172,8 @@ Resources:
                           "arn:aws:iam::aws:policy/SecurityAudit",
                           "arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess",
                           "arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess",
-                          "arn:aws:iam::aws:policy/IAMAccessAnalyzerReadOnlyAccess"
+                          "arn:aws:iam::aws:policy/IAMAccessAnalyzerReadOnlyAccess",
+                          "arn:aws:iam::aws:policy/IAMAccessAdvisorReadOnly"
                       ],
                       "MaxSessionDuration": 28800,
                       "AssumeRolePolicyDocument": {
@@ -148,22 +183,31 @@ Resources:
                                   "Effect": "Allow",
                                   "Principal": {
                                       "AWS": {
-                                          "Fn::Sub": "${AdminRoleArn}"
+                                          "Fn::Sub": "${OrganizationRoleArn}"
                                       }
                                   },
                                   "Action": [
                                       "sts:AssumeRole",
                                       "sts:TagSession"
-                                  ]
-                              }
-                          ]
-                      }
-                  }
-              }
-          }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
         }
+
+
 Outputs:
-  AdminRoleArn:
-    Value: !GetAtt SimpleStackReadOnly.Arn
-  MemberRoleName:
-    Value: !Ref MemberRoleName
+  CFNOrganizationRoleArn:
+    Description: Organization role ARN.
+    Value: !GetAtt OrganizationRole.Arn
+  AccessKeyId:
+    Value: !Ref IAMAccessKeys
+    Export:
+      Name: !Sub '${AWS::StackName}-AccessKeyId'
+  SecretAccessKey:
+    Value: !GetAtt [IAMAccessKeys, SecretAccessKey]
+    Export:
+      Name: !Sub '${AWS::StackName}-SecretAccessKey'
